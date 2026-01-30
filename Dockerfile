@@ -4,14 +4,11 @@ FROM python:3.12-slim
 # Set working directory
 WORKDIR /app
 
-# Install uv for package management
-RUN pip install uv
-
 # Copy dependency files
-COPY pyproject.toml ./
+COPY requirements.txt ./
 
-# Install dependencies using uv
-RUN uv pip install --system -e .
+# Install dependencies using pip
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app.py ./

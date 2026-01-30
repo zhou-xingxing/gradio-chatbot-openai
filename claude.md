@@ -8,7 +8,7 @@
 ## 技术栈要求
 - 使用uv进行Python包管理
 - 使用Python 3.12
-- 使用Gradio最新版本创建聊天机器人
+- 使用Gradio6创建聊天机器人
 - 使用openai的SDK
 
 

@@ -12,7 +12,7 @@ load_dotenv()
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('chatbot.log', encoding='utf-8'),
@@ -37,38 +37,29 @@ class ChatState:
     def __init__(self):
         self.context_size = DEFAULT_CONTEXT_SIZE
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
-        self.history = []
-        self.show_thinking = True
+        self.enable_thinking = True
 
 
 # Global state
 chat_state = ChatState()
 
 
-def reset_chat() -> None:
-    """Reset the chat history."""
-    chat_state.history = []
-    return None
-
-
-def update_context_size(size: float | int) -> str:
+def update_context_size(size: float | int) -> None:
     """Update the context size for conversation memory."""
     try:
         size = int(size)
         if size < 1:
             size = 1
         chat_state.context_size = size
-        return f"上下文记忆已设置为 {size} 轮对话"
     except ValueError:
-        return "请输入有效的数字"
+        pass
 
 
-def update_system_prompt(prompt: str) -> str:
+def update_system_prompt(prompt: str) -> None:
     """Update the system prompt."""
     if not prompt or prompt.strip() == "":
         prompt = DEFAULT_SYSTEM_PROMPT
     chat_state.system_prompt = prompt.strip()
-    return f"系统提示词已更新"
 
 
 def chat_response(message: str, history: list[dict] | None) -> Generator[str, None, None]:
@@ -84,14 +75,26 @@ def chat_response(message: str, history: list[dict] | None) -> Generator[str, No
 
     # Add conversation history with context limit
     # Gradio 6.0 uses dict format with 'role' and 'content' keys
-    recent_history = history[-chat_state.context_size:] if history else []
+    recent_history = history[-chat_state.context_size*2:] if history else []
+    # logger.info(f"使用的历史消息: {recent_history}")
     for msg in recent_history:
         if isinstance(msg, dict):
             role = msg.get("role", "")
             content = msg.get("content", "")
-            # Skip empty content or None
-            if not content or content is None:
+
+            # Handle Gradio 6.0 format: content is a list of dicts
+            if isinstance(content, list):
+                # Extract text content from the list
+                text_content = ""
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text_content += item.get("text", "")
+                content = text_content
+
+            # Skip empty content
+            if not content or not content.strip():
                 continue
+
             # Extract content after thinking tags for assistant messages
             if role == "assistant":
                 # Handle new format: >> ## 完整回复
@@ -100,27 +103,35 @@ def chat_response(message: str, history: list[dict] | None) -> Generator[str, No
                 # Handle old format: </details>
                 elif "<details>" in content:
                     content = content.split("</details>")[-1].strip()
+
             messages.append({"role": role, "content": content})
 
     # Add current message
     messages.append({"role": "user", "content": message})
+    # logger.info(f"构建消息: {messages}")
 
     try:
+        # Build API request parameters
+        api_params = {
+            "model": DEFAULT_MODEL,
+            "messages": messages,
+            "stream": True,
+        }
+
+        # Only include thinking parameter if enabled
+        if chat_state.enable_thinking:
+            api_params["extra_body"] = {
+                "thinking": {
+                    "type": "enabled",
+                }
+            }
+
+        # logger.info(f"Sending API request with params: {api_params}")
         # Call OpenAI API with streaming
-        stream = client.chat.completions.create(
-            model=DEFAULT_MODEL,
-            messages=messages,
-            stream=True,
-            extra_body={
-            "thinking": {
-                "type": "enabled",
-            },
-          }
-        )
+        stream = client.chat.completions.create(**api_params)
 
         # Stream the response
         full_response = ""
-        thinking_content = ""
         thinking_started = False
         thinking_ended = False
 
@@ -130,39 +141,22 @@ def chat_response(message: str, history: list[dict] | None) -> Generator[str, No
 
             # Check for reasoning content (try multiple possible field names)
             reasoning_content = getattr(delta, 'reasoning_content', None) or getattr(delta, 'reasoning', None)
-            if reasoning_content and chat_state.show_thinking:
+            if reasoning_content and chat_state.enable_thinking:
                 if not thinking_started:
                     # Start thinking section
                     thinking_started = True
                     yield ">> ## 思考过程\n\n"
-                thinking_content += reasoning_content
                 yield reasoning_content
 
             # Check for regular content
             if delta.content:
                 content = delta.content
-                if thinking_started and not thinking_ended and chat_state.show_thinking:
+                if thinking_started and not thinking_ended and chat_state.enable_thinking:
                     # End thinking section and start response
                     thinking_ended = True
                     yield "\n\n>> ## 完整回复\n\n"
                 full_response += content
                 yield content
-
-        # Close thinking section if it was started but never ended
-        if thinking_started and not thinking_ended:
-            yield "\n\n--- 正式回复 ---\n\n"
-
-        # Build the assistant message with reasoning if present
-        if thinking_content and chat_state.show_thinking:
-            assistant_message = f">> ## 思考过程\n\n{thinking_content}\n\n>> ## 完整回复\n\n{full_response}"
-        else:
-            assistant_message = full_response
-
-        # Update state history
-        chat_state.history.append((message, assistant_message))
-
-        # Log API response
-        # logger.info(f"API响应: {assistant_message[:200]}..." if len(assistant_message) > 200 else assistant_message)
 
     except Exception as e:
         error_msg = f"Error: {str(e)}"
@@ -215,9 +209,9 @@ with gr.Blocks(title="AI Chatbot") as demo:
             update_context_btn = gr.Button("更新记忆设置", size="sm")
 
             show_thinking = gr.Checkbox(
-                label="显示思考过程",
+                label="启用思考能力",
                 value=True,
-                info="是否显示AI的思考内容"
+                info="是否启用AI的思考功能"
             )
 
             # Info panel
@@ -238,7 +232,7 @@ with gr.Blocks(title="AI Chatbot") as demo:
         if not message:
             return None, ""
         # Log user input
-        logger.info(f"用户输入: {message}")
+        # logger.info(f"用户输入: {message}")
         # Gradio 6.0 expects list of messages
         if history is None:
             history = []
@@ -266,47 +260,35 @@ with gr.Blocks(title="AI Chatbot") as demo:
         outputs=[chatbot, msg]
     )
 
-    msg.submit(
-        submit_message,
-        inputs=[msg, chatbot],
-        outputs=[chatbot, msg]
-    )
-
     clear.click(
-        reset_chat,
+        lambda: None,
         outputs=[chatbot]
     )
 
-    def update_settings(size: float | int) -> tuple[str, str]:
-        status = update_context_size(size)
-        return status, f"当前记忆: {chat_state.context_size} 轮"
-
-    def update_prompt_settings(prompt: str) -> str:
-        status = update_system_prompt(prompt)
-        return status
-
-    def toggle_thinking(show: bool) -> None:
-        chat_state.show_thinking = show
-
     update_context_btn.click(
-        update_settings,
+        update_context_size,
         inputs=[context_size]
     )
 
     update_prompt_btn.click(
-        update_prompt_settings,
+        update_system_prompt,
         inputs=[system_prompt]
     )
 
+    def toggle_thinking_enable(show: bool) -> None:
+        chat_state.enable_thinking = show
+
     show_thinking.change(
-        toggle_thinking,
+        toggle_thinking_enable,
         inputs=[show_thinking]
     )
 
 
 if __name__ == "__main__":
+    logger.warning("服务器正在启动...")
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
         share=False
     )
+    logger.warning("服务器已关闭")
