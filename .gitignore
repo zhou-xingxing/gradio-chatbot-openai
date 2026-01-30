@@ -15,3 +15,6 @@ build/
 .mypy_cache/
 .ruff_cache/
 .DS_Store
+# uv
+.uv/
+uv.lock
