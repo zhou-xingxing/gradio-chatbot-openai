@@ -123,7 +123,8 @@ def chat_response(message: str, history: list[dict] | None) -> Generator[str, No
             api_params["extra_body"] = {
                 "thinking": {
                     "type": "enabled",
-                }
+                },
+                "enable_thinking": True
             }
 
         # logger.info(f"Sending API request with params: {api_params}")

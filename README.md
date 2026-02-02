@@ -17,13 +17,28 @@
 
 ## 本地运行
 
-### 1. 安装依赖
+### 1. 创建并激活虚拟环境
+
+首先使用 Python 3.12 创建虚拟环境：
+
+```bash
+# 创建虚拟环境
+python3.12 -m venv venv
+
+# 激活虚拟环境
+# macOS/Linux:
+source venv/bin/activate
+# Windows:
+venv\Scripts\activate
+```
+
+### 2. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 配置环境变量
+### 3. 配置环境变量
 
 创建 `.env` 文件：
 
@@ -35,7 +50,7 @@ DEFAULT_CONTEXT_SIZE=10
 DEFAULT_SYSTEM_PROMPT=You are a helpful AI assistant.
 ```
 
-### 3. 启动应用
+### 4. 启动应用
 
 ```bash
 python app.py
