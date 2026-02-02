@@ -19,11 +19,17 @@
 
 ### 1. 创建并激活虚拟环境
 
-首先使用 Python 3.12 创建虚拟环境：
+首先检查 Python 版本是否为 3.12+：
+
+```bash
+python3 --version
+```
+
+如果版本满足要求，创建虚拟环境：
 
 ```bash
 # 创建虚拟环境
-python3.12 -m venv venv
+python3 -m venv venv
 
 # 激活虚拟环境
 # macOS/Linux:
@@ -31,6 +37,16 @@ source venv/bin/activate
 # Windows:
 venv\Scripts\activate
 ```
+
+**如果 Python 版本低于 3.12，可以使用以下方式切换：**
+
+- **macOS (Homebrew)**: `brew install python@3.12`，然后使用 `python3.12 -m venv venv`
+- **使用 pyenv**:
+  ```bash
+  pyenv install 3.12.0
+  pyenv local 3.12.0
+  python -m venv venv
+  ```
 
 ### 2. 安装依赖
 
