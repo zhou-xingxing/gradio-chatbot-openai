@@ -33,36 +33,36 @@ DEFAULT_CONTEXT_SIZE = int(os.getenv("DEFAULT_CONTEXT_SIZE", "10"))
 DEFAULT_SYSTEM_PROMPT = os.getenv("DEFAULT_SYSTEM_PROMPT", "You are a helpful AI assistant.")
 
 
-class ChatState:
-    def __init__(self):
-        self.context_size = DEFAULT_CONTEXT_SIZE
-        self.system_prompt = DEFAULT_SYSTEM_PROMPT
-        self.enable_thinking = True
+def create_user_state():
+    """Create a new user-specific state."""
+    return {
+        "context_size": DEFAULT_CONTEXT_SIZE,
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+        "enable_thinking": True
+    }
 
 
-# Global state
-chat_state = ChatState()
-
-
-def update_context_size(size: float | int) -> None:
+def update_context_size(size: float | int, state: dict) -> dict:
     """Update the context size for conversation memory."""
     try:
         size = int(size)
         if size < 1:
             size = 1
-        chat_state.context_size = size
+        state["context_size"] = size
     except ValueError:
         pass
+    return state
 
 
-def update_system_prompt(prompt: str) -> None:
+def update_system_prompt(prompt: str, state: dict) -> dict:
     """Update the system prompt."""
     if not prompt or prompt.strip() == "":
         prompt = DEFAULT_SYSTEM_PROMPT
-    chat_state.system_prompt = prompt.strip()
+    state["system_prompt"] = prompt.strip()
+    return state
 
 
-def chat_response(message: str, history: list[dict] | None) -> Generator[str, None, None]:
+def chat_response(message: str, history: list[dict] | None, state: dict) -> Generator[str, None, None]:
     """Generate chat response using OpenAI API with streaming."""
     # Build conversation history
     messages = []
@@ -70,12 +70,12 @@ def chat_response(message: str, history: list[dict] | None) -> Generator[str, No
     # Add system message
     messages.append({
         "role": "system",
-        "content": chat_state.system_prompt
+        "content": state["system_prompt"]
     })
 
     # Add conversation history with context limit
     # Gradio 6.0 uses dict format with 'role' and 'content' keys
-    recent_history = history[-chat_state.context_size*2:] if history else []
+    recent_history = history[-state["context_size"]*2:] if history else []
     # logger.info(f"使用的历史消息: {recent_history}")
     for msg in recent_history:
         if isinstance(msg, dict):
@@ -119,7 +119,7 @@ def chat_response(message: str, history: list[dict] | None) -> Generator[str, No
         }
 
         # Only include thinking parameter if enabled
-        if chat_state.enable_thinking:
+        if state["enable_thinking"]:
             api_params["extra_body"] = {
                 "thinking": {
                     "type": "enabled",
@@ -142,7 +142,7 @@ def chat_response(message: str, history: list[dict] | None) -> Generator[str, No
 
             # Check for reasoning content (try multiple possible field names)
             reasoning_content = getattr(delta, 'reasoning_content', None) or getattr(delta, 'reasoning', None)
-            if reasoning_content and chat_state.enable_thinking:
+            if reasoning_content and state["enable_thinking"]:
                 if not thinking_started:
                     # Start thinking section
                     thinking_started = True
@@ -152,7 +152,7 @@ def chat_response(message: str, history: list[dict] | None) -> Generator[str, No
             # Check for regular content
             if delta.content:
                 content = delta.content
-                if thinking_started and not thinking_ended and chat_state.enable_thinking:
+                if thinking_started and not thinking_ended and state["enable_thinking"]:
                     # End thinking section and start response
                     thinking_ended = True
                     yield "\n\n>> ## 完整回复\n\n"
@@ -168,6 +168,9 @@ def chat_response(message: str, history: list[dict] | None) -> Generator[str, No
 # Create Gradio interface
 with gr.Blocks(title="AI Chatbot") as demo:
     gr.Markdown("# 🤖 AI 聊天机器人")
+
+    # User-specific state (isolated per session)
+    user_state = gr.State(create_user_state())
 
     with gr.Row():
         with gr.Column(scale=3):
@@ -229,7 +232,7 @@ with gr.Blocks(title="AI Chatbot") as demo:
             )
 
     # Event handlers
-    def submit_message(message: str, history: list[dict] | None) -> Generator[tuple[list[dict], str], None, None]:
+    def submit_message(message: str, history: list[dict] | None, state: dict) -> Generator[tuple[list[dict], str], None, None]:
         if not message:
             return None, ""
         # Log user input
@@ -245,19 +248,19 @@ with gr.Blocks(title="AI Chatbot") as demo:
         yield history, ""
 
         # Add loading message in chatbot
-        history.append({"role": "assistant", "content": "⏳ 正在思考..."})
+        history.append({"role": "assistant", "content": "⏳ 正在推理..."})
         yield history, ""
 
         # Stream the response
         response_text = ""
-        for chunk in chat_response(message, history[:-2]):
+        for chunk in chat_response(message, history[:-2], state):
             response_text += chunk
             # Update the assistant message with streaming content
             yield history[:-1] + [{"role": "assistant", "content": response_text}], ""
 
     submit.click(
         submit_message,
-        inputs=[msg, chatbot],
+        inputs=[msg, chatbot, user_state],
         outputs=[chatbot, msg]
     )
 
@@ -268,26 +271,33 @@ with gr.Blocks(title="AI Chatbot") as demo:
 
     update_context_btn.click(
         update_context_size,
-        inputs=[context_size]
+        inputs=[context_size, user_state],
+        outputs=[user_state]
     )
 
     update_prompt_btn.click(
         update_system_prompt,
-        inputs=[system_prompt]
+        inputs=[system_prompt, user_state],
+        outputs=[user_state]
     )
 
-    def toggle_thinking_enable(show: bool) -> None:
-        chat_state.enable_thinking = show
+    def toggle_thinking_enable(show: bool, state: dict) -> dict:
+        state["enable_thinking"] = show
+        return state
 
     show_thinking.change(
         toggle_thinking_enable,
-        inputs=[show_thinking]
+        inputs=[show_thinking, user_state],
+        outputs=[user_state]
     )
 
 
 if __name__ == "__main__":
     logger.warning("服务器正在启动...")
-    demo.launch(
+    demo.queue(
+        default_concurrency_limit=5,   # 支持5个并发对话
+        max_size=100                   # 队列最大长度
+    ).launch(
         server_name="0.0.0.0",
         server_port=7860,
         share=False
