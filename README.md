@@ -43,24 +43,31 @@ pip install -r requirements.txt
 
 #### 方式一：配置文件（推荐）
 
-创建 `config.yaml` 文件：
+复制示例配置文件并修改：
+
+```bash
+cp config.yaml.example config.yaml
+```
+
+编辑 `config.yaml`：
 
 ```yaml
 models:
   - id: "gpt-4o"
-    api_key: "${API_KEY}"
-    base_url: "${BASE_URL:-https://api.openai.com/v1}"
+    api_key: "sk-xxx"
+    base_url: "https://api.openai.com/v1"
     supports_thinking: false
 
   - id: "deepseek-chat"
-    api_key: "${DEEPSEEK_API_KEY}"
+    api_key: "sk-yyy"
     base_url: "https://api.deepseek.com/v1"
     supports_thinking: true
+
+# 可选配置
+context_size: 5
+system_prompt: "You are a helpful AI assistant."
 ```
 
-配置文件支持环境变量引用：
-- `${VAR}` - 直接引用环境变量
-- `${VAR:-default}` - 引用环境变量，不存在时使用默认值
 
 #### 方式二：纯环境变量
 
@@ -72,8 +79,6 @@ models:
 API_KEY=your_api_key_here
 MODEL_ID=gpt-4o
 BASE_URL=https://api.openai.com/v1
-DEFAULT_CONTEXT_SIZE=5
-DEFAULT_SYSTEM_PROMPT=You are a helpful AI assistant.
 ```
 
 ### 4. 启动应用
@@ -122,7 +127,6 @@ cat > .env << 'EOF'
 API_KEY=your_api_key
 MODEL_ID=gpt-4o
 BASE_URL=https://api.openai.com/v1
-DEFAULT_CONTEXT_SIZE=5
 EOF
 
 # 运行容器时加载
@@ -143,22 +147,27 @@ docker run -d \
 ```yaml
 models:
   - id: "模型ID"
-    api_key: "API密钥或${环境变量名}"
+    api_key: "API密钥"
     base_url: "API基础URL"
-    supports_thinking: true/false  # 是否支持思考过程
+    supports_thinking: true/false  # 是否支持思考过程显示
 
-# 注：models 列表中的第一个模型将作为默认模型
+# 可选：显式指定默认模型（不指定则使用 models 列表中的第一个）
+# default_model_id: "gpt-4o"
+
+# 可选：对话记忆轮数（默认 5）
+context_size: 5
+
+# 可选：系统提示词
+system_prompt: "You are a helpful AI assistant."
 ```
 
-### 环境变量说明
+### 环境变量说明（config.yaml 不存在时使用）
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `API_KEY` | API 密钥（config.yaml不存在时必需） | - |
-| `MODEL_ID` | 模型 ID（config.yaml不存在时使用） | `gpt-4o` |
-| `BASE_URL` | API 基础 URL（config.yaml不存在时使用） | `https://api.openai.com/v1` |
-| `DEFAULT_CONTEXT_SIZE` | 默认对话记忆轮数（config.yaml不存在时使用） | `5` |
-| `DEFAULT_SYSTEM_PROMPT` | 默认系统提示词（config.yaml不存在时使用） | `You are a helpful AI assistant.` |
+| `API_KEY` | API 密钥 | - |
+| `MODEL_ID` | 模型 ID | `gpt-4o` |
+| `BASE_URL` | API 基础 URL | `https://api.openai.com/v1` |
 
 ---
 
@@ -166,13 +175,15 @@ models:
 
 ```
 .
-├── app.py              # 主程序
-├── config.yaml         # 模型配置文件（示例）
-├── Dockerfile          # Docker 镜像构建文件
-├── requirements.txt    # Python 依赖
-├── .env                # 环境变量配置（需自行创建，可选）
-├── CLAUDE.md           # 项目开发规范
-└── README.md           # 本文档
+├── app.py                  # 主程序
+├── config.yaml             # 模型配置文件（需自行创建）
+├── config.yaml.example     # 配置文件示例
+├── Dockerfile              # Docker 镜像构建文件
+├── requirements.txt        # Python 依赖
+├── .env                    # 环境变量配置（需自行创建，可选）
+├── .gitignore              # Git 忽略文件
+├── CLAUDE.md               # 项目开发规范
+└── README.md               # 本文档
 ```
 
 ---
