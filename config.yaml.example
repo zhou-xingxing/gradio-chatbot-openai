@@ -1,0 +1,27 @@
+# AI Chatbot Configuration
+# 支持多模型配置，每个模型独立设置 API 密钥和参数
+
+models:
+  - id: "gpt-4o"
+    api_key: "${API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    supports_thinking: false
+
+# 示例：添加更多模型配置
+#  - id: "deepseek-chat"
+#    api_key: "${DEEPSEEK_API_KEY}"
+#    base_url: "https://api.deepseek.com/v1"
+#    supports_thinking: true
+#
+#  - id: "claude-3-sonnet"
+#    api_key: "${ANTHROPIC_API_KEY}"
+#    base_url: "https://api.anthropic.com/v1"
+#    supports_thinking: false
+
+
+# 可选配置：显式指定默认模型ID（如果不指定，默认使用 models 列表中的第一个模型）
+# default_model_id: "gpt-4o"
+
+# context_size: 对话记忆轮数，机器人能记住的最近对话轮数
+context_size: 5
+system_prompt: "You are a helpful AI assistant."

@@ -19,3 +19,6 @@ build/
 .uv/
 uv.lock
 pyproject.toml
+
+# Config file with sensitive data
+config.yaml
