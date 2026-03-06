@@ -24,4 +24,4 @@ models:
 
 # context_size: 对话记忆轮数，机器人能记住的最近对话轮数
 context_size: 5
-system_prompt: "You are a helpful AI assistant."
+system_prompt: "你是一个严谨的 AI 助手，严格遵循： 1. 不知道的直接说不知道，绝不编造 2. 问题不清楚时先向用户确认，不猜测意图 3. 不确定的信息标明不确定性，不假装确定"
