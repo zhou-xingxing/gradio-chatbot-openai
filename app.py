@@ -5,6 +5,7 @@ from typing import Generator, TypedDict
 from dotenv import load_dotenv
 from openai import OpenAI, APIError, AuthenticationError, RateLimitError
 import yaml
+import requests
 
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "false"
 import gradio as gr
@@ -12,7 +13,8 @@ import gradio as gr
 
 # Configure logging
 logging.basicConfig(
-    level=logging.WARNING,
+    # level=logging.WARNING,
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('chatbot.log', encoding='utf-8'),
@@ -33,6 +35,9 @@ class UserState(TypedDict):
 
 # OpenAI client cache to avoid recreating clients
 _client_cache: dict[str, OpenAI] = {}
+
+# Model context length cache (loaded at startup)
+_model_context_cache: dict[str, str] = {}
 
 
 def get_or_create_openai_client(model_id: str) -> OpenAI:
@@ -111,6 +116,89 @@ MODEL_CHOICES = list(MODEL_CONFIG_MAP.keys())  # Dropdown choices are model IDs
 def get_model_config(model_id: str) -> dict:
     """Get configuration for a specific model."""
     return MODEL_CONFIG_MAP.get(model_id, CONFIG['models'][0])
+
+
+def fetch_max_model_len_from_api(model_id: str, model_config: dict) -> str:
+    """Fetch max_model_len from API endpoint. Returns empty string if not available."""
+    base_url = model_config.get('base_url', '')
+    api_key = model_config.get('api_key', '')
+
+    try:
+        models_url = base_url.rstrip('/') + '/models'
+        headers = {"Authorization": f"Bearer {api_key}"}
+        logger.info(f"尝试从 API 获取模型信息: {models_url}")
+        response = requests.get(models_url, headers=headers, timeout=5)
+
+        if response.status_code == 200:
+            data = response.json()
+            logger.info(f"API 响应数据: {data}")
+            # Look for the specific model in the response
+            if 'data' in data and isinstance(data['data'], list):
+                for model in data['data']:
+                    if model.get('id') == model_id:
+                        max_len = model.get('max_model_len')
+                        if max_len is not None:
+                            return str(max_len)
+                        # Try alternative field names
+                        max_len = model.get('max_tokens') or model.get('context_length')
+                        if max_len is not None:
+                            return str(max_len)
+    except Exception:
+        # Silently fail
+        pass
+
+    return ""
+
+
+def fetch_max_model_len(model_id: str) -> str:
+    """Get max_model_len from cache or config. Returns empty string if not available.
+
+    Priority:
+    1. Cached value from startup
+    2. Config file's max_model_len field
+    3. Empty string if neither available
+    """
+    # First check cache
+    if model_id in _model_context_cache:
+        return _model_context_cache[model_id]
+
+    # Fall back to config
+    model_config = get_model_config(model_id)
+    max_len = model_config.get('max_model_len')
+    if max_len is not None:
+        return str(max_len)
+
+    return ""
+
+
+def load_all_model_contexts() -> None:
+    """Load max_model_len for all models at startup and cache them."""
+    global _model_context_cache
+    logger.info("正在加载所有模型的上下文长度...")
+
+    for model_id, model_config in MODEL_CONFIG_MAP.items():
+        # First try API
+        max_len = fetch_max_model_len_from_api(model_id, model_config)
+
+        # If API failed, try config
+        if not max_len:
+            logger.info(f"API 无法获取模型 '{model_id}' 的上下文长度，尝试从配置文件获取...")
+            config_max_len = model_config.get('max_model_len')
+            if config_max_len is not None:
+                max_len = str(config_max_len)
+
+        # Store in cache (even if empty, to avoid repeated API calls)
+        _model_context_cache[model_id] = max_len
+        if max_len:
+            logger.info(f"模型 '{model_id}' 的最大上下文长度: {max_len}")
+        else:
+            logger.warning(f"模型 '{model_id}' 无法获取最大上下文长度")
+
+    logger.info("模型上下文长度加载完成")
+
+
+# Load all model context lengths at startup (after all functions defined)
+load_all_model_contexts()
 
 
 def create_user_state(enable_thinking: bool = True) -> UserState:
@@ -222,7 +310,10 @@ def chat_response(message: str, history: list[dict] | None, state: UserState) ->
                 "thinking": {
                     "type": "enabled",
                 },
-                "enable_thinking": True
+                "enable_thinking": True,
+                "reasoning": {
+                    "enabled": True,
+                }
             }
 
         # Call OpenAI API with streaming
@@ -311,6 +402,14 @@ with gr.Blocks(title="AI Chatbot") as demo:
                 info="模型对应的API地址"
             )
 
+            # Max context length display (read-only, synced with model selection)
+            max_context_display = gr.Textbox(
+                label="最大上下文长度",
+                value=fetch_max_model_len(CONFIG['default_model_id']),
+                interactive=False,
+                info="模型支持的最大上下文token数(输入+输出)"
+            )
+
             # System prompt setting
             system_prompt = gr.Textbox(
                 label="系统提示词",
@@ -375,24 +474,27 @@ with gr.Blocks(title="AI Chatbot") as demo:
     )
 
     # Model selection handler
-    def on_model_change(model_id: str, state: UserState) -> tuple[UserState, str, dict]:
+    def on_model_change(model_id: str, state: UserState) -> tuple[UserState, str, str, dict]:
         state = update_model(model_id, state)
         model_config = get_model_config(model_id)
 
         # Get URL for the selected model
         url = model_config.get('base_url', '')
 
+        # Fetch max context length from API or config
+        max_context_len = fetch_max_model_len(model_id)
+
         # Update thinking checkbox based on model support
         supports_thinking = model_config.get('supports_thinking', False)
 
-        # 返回更新后的状态、URL、以及 checkbox 的更新配置（值和是否可交互）
+        # 返回更新后的状态、URL、最大上下文长度、以及 checkbox 的更新配置（值和是否可交互）
         # update_model 已经根据模型支持情况设置了 state["enable_thinking"]
-        return state, url, gr.update(value=state["enable_thinking"], interactive=supports_thinking)
+        return state, url, max_context_len, gr.update(value=state["enable_thinking"], interactive=supports_thinking)
 
     model_dropdown.change(
         on_model_change,
         inputs=[model_dropdown, user_state],
-        outputs=[user_state, model_url_display, show_thinking]
+        outputs=[user_state, model_url_display, max_context_display, show_thinking]
     )
 
     update_context_btn.click(
