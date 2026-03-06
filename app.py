@@ -129,7 +129,11 @@ def update_model(model_id: str, state: UserState) -> UserState:
 
     # Update thinking capability based on model
     model_config = get_model_config(model_id)
-    if not model_config.get('supports_thinking', False):
+    if model_config.get('supports_thinking', False):
+        # 如果模型支持思考能力，默认启用
+        state["enable_thinking"] = True
+    else:
+        # 如果模型不支持思考能力，禁用
         state["enable_thinking"] = False
 
     return state
@@ -380,13 +384,10 @@ with gr.Blocks(title="AI Chatbot") as demo:
 
         # Update thinking checkbox based on model support
         supports_thinking = model_config.get('supports_thinking', False)
-        if not supports_thinking:
-            state["enable_thinking"] = False
 
-        # 如果模型支持思考，保持用户当前的选择；不支持则强制设为 False
-        checkbox_value = state["enable_thinking"] if supports_thinking else False
         # 返回更新后的状态、URL、以及 checkbox 的更新配置（值和是否可交互）
-        return state, url, gr.update(value=checkbox_value, interactive=supports_thinking)
+        # update_model 已经根据模型支持情况设置了 state["enable_thinking"]
+        return state, url, gr.update(value=state["enable_thinking"], interactive=supports_thinking)
 
     model_dropdown.change(
         on_model_change,
@@ -420,7 +421,7 @@ with gr.Blocks(title="AI Chatbot") as demo:
 if __name__ == "__main__":
     logger.warning("服务器正在启动...")
     demo.queue(
-        default_concurrency_limit=5,   # 支持5个并发对话
+        default_concurrency_limit=10,   # 支持10个并发对话
         max_size=100                   # 队列最大长度
     ).launch(
         server_name="0.0.0.0",
