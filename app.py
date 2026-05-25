@@ -1,7 +1,7 @@
 import os
 import sys
 import logging
-from typing import Generator, TypedDict
+from typing import Any, Generator, NoReturn, NotRequired, TypedDict
 from dotenv import load_dotenv
 from openai import OpenAI, APIError, AuthenticationError, RateLimitError
 import yaml
@@ -23,6 +23,50 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+DEFAULT_CONTEXT_SIZE = 5
+DEFAULT_SYSTEM_PROMPT = 'You are a helpful AI assistant.'
+INPUT_HINT_CSS = """
+.message-input {
+    gap: 0.35rem;
+}
+
+.input-header {
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.input-label {
+    color: var(--body-text-color);
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.input-shortcut-hint {
+    color: var(--body-text-color-subdued);
+    font-size: 0.85rem;
+    line-height: 1.3;
+    text-align: right;
+}
+
+.input-label p,
+.input-shortcut-hint p {
+    margin: 0;
+}
+
+@media (max-width: 700px) {
+    .input-header {
+        align-items: flex-start;
+        gap: 0.25rem;
+    }
+
+    .input-shortcut-hint {
+        text-align: left;
+    }
+}
+"""
+
 
 # Type definitions
 class UserState(TypedDict):
@@ -31,6 +75,23 @@ class UserState(TypedDict):
     context_size: int
     system_prompt: str
     enable_thinking: bool
+
+
+class ModelConfig(TypedDict):
+    """模型配置结构。"""
+    id: str
+    api_key: str
+    base_url: str
+    supports_thinking: NotRequired[bool]
+    max_model_len: NotRequired[int | str]
+
+
+class AppConfig(TypedDict):
+    """应用配置结构。"""
+    models: list[ModelConfig]
+    context_size: int
+    system_prompt: str
+    default_model_id: str
 
 
 # OpenAI client cache to avoid recreating clients
@@ -51,14 +112,14 @@ def get_or_create_openai_client(model_id: str) -> OpenAI:
     return _client_cache[model_id]
 
 
-def load_config() -> dict:
+def load_config() -> AppConfig:
     """Load configuration from config.yaml or environment variables."""
     config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
 
     if os.path.exists(config_path):
         # Use config.yaml only
         with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+            config: Any = yaml.safe_load(f) or {}
     else:
         # Fallback to environment variables
         config = {
@@ -70,37 +131,98 @@ def load_config() -> dict:
             }]
         }
 
-    # Set default values if not present in config
-    if not config.get('context_size'):
-        config['context_size'] = 5
-    if not config.get('system_prompt'):
-        config['system_prompt'] = 'You are a helpful AI assistant.'
-
-    # Validate configuration
-    validate_config(config)
-    return config
+    return validate_config(config)
 
 
-def validate_config(config: dict) -> None:
-    """Validate configuration and exit if invalid."""
-    if not config.get('models'):
-        logger.error("配置错误: models 列表为空或未定义")
-        sys.exit(1)
+def exit_config_error(message: str) -> NoReturn:
+    """记录配置错误并退出程序。"""
+    logger.error(f"配置错误: {message}")
+    sys.exit(1)
 
-    for model in config['models']:
-        if 'id' not in model:
-            logger.error("配置错误: 模型缺少必需的 'id' 字段")
-            sys.exit(1)
-        if 'api_key' not in model:
-            logger.error(f"配置错误: 模型 '{model.get('id', 'unknown')}' 缺少 'api_key'")
-            sys.exit(1)
-        if 'base_url' not in model:
-            logger.error(f"配置错误: 模型 '{model.get('id', 'unknown')}' 缺少 'base_url'")
-            sys.exit(1)
 
-    # Set default_model_id to first model if not specified
-    model_ids = [m['id'] for m in config['models']]
-    config.setdefault('default_model_id', model_ids[0])
+def validate_config(config: Any) -> AppConfig:
+    """校验并归一化配置，返回应用可直接使用的结构。"""
+    if not isinstance(config, dict):
+        exit_config_error("配置文件顶层必须是字典")
+
+    raw_models = config.get('models')
+    if not isinstance(raw_models, list) or not raw_models:
+        exit_config_error("models 必须是非空列表")
+
+    models: list[ModelConfig] = []
+    model_ids: set[str] = set()
+    for index, raw_model in enumerate(raw_models, start=1):
+        if not isinstance(raw_model, dict):
+            exit_config_error(f"models[{index}] 必须是字典")
+
+        raw_model_id = raw_model.get('id')
+        if not isinstance(raw_model_id, str) or not raw_model_id.strip():
+            exit_config_error(f"models[{index}] 缺少非空字符串字段 'id'")
+        model_id = raw_model_id.strip()
+        if model_id in model_ids:
+            exit_config_error(f"模型 ID '{model_id}' 重复")
+
+        raw_api_key = raw_model.get('api_key')
+        if not isinstance(raw_api_key, str) or not raw_api_key.strip():
+            exit_config_error(f"模型 '{model_id}' 缺少非空字符串字段 'api_key'")
+
+        raw_base_url = raw_model.get('base_url')
+        if not isinstance(raw_base_url, str) or not raw_base_url.strip():
+            exit_config_error(f"模型 '{model_id}' 缺少非空字符串字段 'base_url'")
+
+        model_config: ModelConfig = {
+            'id': model_id,
+            'api_key': raw_api_key.strip(),
+            'base_url': raw_base_url.strip(),
+        }
+
+        raw_supports_thinking = raw_model.get('supports_thinking')
+        if raw_supports_thinking is not None:
+            if not isinstance(raw_supports_thinking, bool):
+                exit_config_error(f"模型 '{model_id}' 的 supports_thinking 必须是布尔值")
+            model_config['supports_thinking'] = raw_supports_thinking
+
+        raw_max_model_len = raw_model.get('max_model_len')
+        if raw_max_model_len is not None:
+            if isinstance(raw_max_model_len, bool) or not isinstance(raw_max_model_len, (int, str)):
+                exit_config_error(f"模型 '{model_id}' 的 max_model_len 必须是整数或字符串")
+            if isinstance(raw_max_model_len, str):
+                raw_max_model_len = raw_max_model_len.strip()
+                if not raw_max_model_len:
+                    exit_config_error(f"模型 '{model_id}' 的 max_model_len 不能为空字符串")
+            model_config['max_model_len'] = raw_max_model_len
+
+        model_ids.add(model_id)
+        models.append(model_config)
+
+    raw_context_size = config.get('context_size', DEFAULT_CONTEXT_SIZE)
+    if isinstance(raw_context_size, bool):
+        exit_config_error("context_size 必须是正整数")
+    try:
+        context_size = int(raw_context_size)
+    except (TypeError, ValueError):
+        exit_config_error("context_size 必须是正整数")
+    if context_size < 1:
+        exit_config_error("context_size 必须大于等于 1")
+
+    raw_system_prompt = config.get('system_prompt', DEFAULT_SYSTEM_PROMPT)
+    if not isinstance(raw_system_prompt, str):
+        exit_config_error("system_prompt 必须是字符串")
+    system_prompt = raw_system_prompt.strip() or DEFAULT_SYSTEM_PROMPT
+
+    raw_default_model_id = config.get('default_model_id', models[0]['id'])
+    if not isinstance(raw_default_model_id, str) or not raw_default_model_id.strip():
+        exit_config_error("default_model_id 必须是非空字符串")
+    default_model_id = raw_default_model_id.strip()
+    if default_model_id not in model_ids:
+        exit_config_error(f"default_model_id '{default_model_id}' 不在 models 列表中")
+
+    return {
+        'models': models,
+        'context_size': context_size,
+        'system_prompt': system_prompt,
+        'default_model_id': default_model_id,
+    }
 
 # Load environment variables
 load_dotenv()
@@ -113,12 +235,12 @@ MODEL_CONFIG_MAP = {model['id']: model for model in CONFIG['models']}
 MODEL_CHOICES = list(MODEL_CONFIG_MAP.keys())  # Dropdown choices are model IDs
 
 
-def get_model_config(model_id: str) -> dict:
+def get_model_config(model_id: str) -> ModelConfig:
     """Get configuration for a specific model."""
     return MODEL_CONFIG_MAP.get(model_id, CONFIG['models'][0])
 
 
-def fetch_max_model_len_from_api(model_id: str, model_config: dict) -> str:
+def fetch_max_model_len_from_api(model_id: str, model_config: ModelConfig) -> str:
     """Fetch max_model_len from API endpoint. Returns empty string if not available."""
     base_url = model_config.get('base_url', '')
     api_key = model_config.get('api_key', '')
@@ -324,6 +446,9 @@ def chat_response(message: str, history: list[dict] | None, state: UserState) ->
         thinking_ended = False
 
         for chunk in stream:
+            if not chunk.choices:
+                continue
+
             delta = chunk.choices[0].delta
 
             # Check for reasoning content
@@ -373,11 +498,25 @@ with gr.Blocks(title="AI Chatbot") as demo:
                 label="对话",
                 height=600
             )
-            msg = gr.Textbox(
-                label="输入消息",
-                placeholder="请输入您的问题...",
-                lines=2
-            )
+            with gr.Column(elem_classes="message-input"):
+                with gr.Row(equal_height=False, elem_classes="input-header"):
+                    gr.Markdown(
+                        "输入消息",
+                        elem_classes="input-label",
+                        container=False
+                    )
+                    gr.Markdown(
+                        "Enter 换行 · Shift+Enter 发送",
+                        elem_classes="input-shortcut-hint",
+                        container=False
+                    )
+                msg = gr.Textbox(
+                    label="输入消息",
+                    placeholder="请输入您的问题...",
+                    lines=2,
+                    show_label=False,
+                    scale=8
+                )
             with gr.Row():
                 submit = gr.Button("发送", variant="primary")
                 clear = gr.Button("清除对话")
@@ -441,12 +580,12 @@ with gr.Blocks(title="AI Chatbot") as demo:
 
     # Event handlers
     def submit_message(message: str, history: list[dict] | None, state: UserState) -> Generator[tuple[list[dict], str], None, None]:
+        if history is None:
+            history = []
+
         if not message:
             yield history, ""
             return
-
-        if history is None:
-            history = []
 
         # Add user message to history immediately
         history.append({"role": "user", "content": message})
@@ -463,6 +602,12 @@ with gr.Blocks(title="AI Chatbot") as demo:
             yield history[:-1] + [{"role": "assistant", "content": response_text}], ""
 
     submit.click(
+        submit_message,
+        inputs=[msg, chatbot, user_state],
+        outputs=[chatbot, msg]
+    )
+
+    msg.submit(
         submit_message,
         inputs=[msg, chatbot, user_state],
         outputs=[chatbot, msg]
@@ -528,6 +673,7 @@ if __name__ == "__main__":
     ).launch(
         server_name="0.0.0.0",
         server_port=7860,
+        css=INPUT_HINT_CSS,
         share=False
     )
     logger.warning("服务器已关闭")
