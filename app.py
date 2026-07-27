@@ -80,6 +80,7 @@ class UserState(TypedDict):
 class ModelConfig(TypedDict):
     """模型配置结构。"""
     id: str
+    name: str
     api_key: str
     base_url: str
     supports_thinking: NotRequired[bool]
@@ -122,9 +123,11 @@ def load_config() -> AppConfig:
             config: Any = yaml.safe_load(f) or {}
     else:
         # Fallback to environment variables
+        model_id = os.getenv('MODEL_ID', 'gpt-4o')
         config = {
             'models': [{
-                'id': os.getenv('MODEL_ID', 'gpt-4o'),
+                'id': model_id,
+                'name': os.getenv('MODEL_NAME', model_id),
                 'api_key': os.getenv('API_KEY', ''),
                 'base_url': os.getenv('BASE_URL', 'https://api.openai.com/v1'),
                 'supports_thinking': False
@@ -162,6 +165,10 @@ def validate_config(config: Any) -> AppConfig:
         if model_id in model_ids:
             exit_config_error(f"模型 ID '{model_id}' 重复")
 
+        raw_model_name = raw_model.get('name')
+        if not isinstance(raw_model_name, str) or not raw_model_name.strip():
+            exit_config_error(f"模型 '{model_id}' 缺少非空字符串字段 'name'")
+
         raw_api_key = raw_model.get('api_key')
         if not isinstance(raw_api_key, str) or not raw_api_key.strip():
             exit_config_error(f"模型 '{model_id}' 缺少非空字符串字段 'api_key'")
@@ -172,6 +179,7 @@ def validate_config(config: Any) -> AppConfig:
 
         model_config: ModelConfig = {
             'id': model_id,
+            'name': raw_model_name.strip(),
             'api_key': raw_api_key.strip(),
             'base_url': raw_base_url.strip(),
         }
@@ -230,9 +238,9 @@ load_dotenv()
 # Load configuration
 CONFIG = load_config()
 
-# Build model config mapping and choices list
+# Build model config mapping and dropdown choices
 MODEL_CONFIG_MAP = {model['id']: model for model in CONFIG['models']}
-MODEL_CHOICES = list(MODEL_CONFIG_MAP.keys())  # Dropdown choices are model IDs
+MODEL_CHOICES = [(model['name'], model['id']) for model in CONFIG['models']]
 
 
 def get_model_config(model_id: str) -> ModelConfig:

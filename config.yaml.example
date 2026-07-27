@@ -3,17 +3,20 @@
 
 models:
   - id: "gpt-4o"
+    name: "GPT-4o"
     api_key: "${API_KEY}"
     base_url: "https://api.openai.com/v1"
     supports_thinking: false
 
 # 示例：添加更多模型配置
 #  - id: "deepseek-chat"
+#    name: "DeepSeek Chat"
 #    api_key: "${DEEPSEEK_API_KEY}"
 #    base_url: "https://api.deepseek.com/v1"
 #    supports_thinking: true
 #
 #  - id: "claude-3-sonnet"
+#    name: "Claude 3 Sonnet"
 #    api_key: "${ANTHROPIC_API_KEY}"
 #    base_url: "https://api.anthropic.com/v1"
 #    supports_thinking: false

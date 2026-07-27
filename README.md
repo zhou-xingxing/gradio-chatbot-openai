@@ -72,11 +72,13 @@ cp config.yaml.example config.yaml
 ```yaml
 models:
   - id: "gpt-4o"
+    name: "GPT-4o"
     api_key: "sk-xxx"
     base_url: "https://api.openai.com/v1"
     supports_thinking: false
 
   - id: "deepseek-chat"
+    name: "DeepSeek Chat"
     api_key: "sk-yyy"
     base_url: "https://api.deepseek.com/v1"
     supports_thinking: true
@@ -96,6 +98,7 @@ system_prompt: "You are a helpful AI assistant."
 ```env
 API_KEY=your_api_key_here
 MODEL_ID=gpt-4o
+MODEL_NAME=GPT-4o
 BASE_URL=https://api.openai.com/v1
 ```
 
@@ -165,6 +168,7 @@ docker run -d \
 ```yaml
 models:
   - id: "模型ID"
+    name: "页面显示名称"
     api_key: "API密钥"
     base_url: "API基础URL"
     supports_thinking: true/false  # 是否支持思考过程显示
