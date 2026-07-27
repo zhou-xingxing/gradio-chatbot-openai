@@ -541,6 +541,14 @@ with gr.Blocks(title="AI Chatbot") as demo:
                 info="选择要使用的AI模型"
             )
 
+            # 模型ID展示（只读，跟随模型选择更新）
+            model_id_display = gr.Textbox(
+                label="Model ID",
+                value=CONFIG['default_model_id'],
+                interactive=False,
+                info="API请求使用的模型ID"
+            )
+
             # URL display (read-only, synced with model selection)
             model_url_display = gr.Textbox(
                 label="API Base URL",
@@ -627,7 +635,7 @@ with gr.Blocks(title="AI Chatbot") as demo:
     )
 
     # Model selection handler
-    def on_model_change(model_id: str, state: UserState) -> tuple[UserState, str, str, dict]:
+    def on_model_change(model_id: str, state: UserState) -> tuple[UserState, str, str, str, dict]:
         state = update_model(model_id, state)
         model_config = get_model_config(model_id)
 
@@ -640,14 +648,14 @@ with gr.Blocks(title="AI Chatbot") as demo:
         # Update thinking checkbox based on model support
         supports_thinking = model_config.get('supports_thinking', False)
 
-        # 返回更新后的状态、URL、最大上下文长度、以及 checkbox 的更新配置（值和是否可交互）
+        # 返回更新后的状态、模型ID、URL、最大上下文长度和 checkbox 配置
         # update_model 已经根据模型支持情况设置了 state["enable_thinking"]
-        return state, url, max_context_len, gr.update(value=state["enable_thinking"], interactive=supports_thinking)
+        return state, model_id, url, max_context_len, gr.update(value=state["enable_thinking"], interactive=supports_thinking)
 
     model_dropdown.change(
         on_model_change,
         inputs=[model_dropdown, user_state],
-        outputs=[user_state, model_url_display, max_context_display, show_thinking]
+        outputs=[user_state, model_id_display, model_url_display, max_context_display, show_thinking]
     )
 
     update_context_btn.click(
