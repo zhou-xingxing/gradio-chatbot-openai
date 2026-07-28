@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- 🤖 **多模型支持**：配置文件中可定义多个模型，页面下拉框实时切换
+- 🤖 **多模型支持**：配置文件中可定义多个模型，相同模型 ID 可按名称区分不同服务入口
 - 🌐 **模型信息展示**：选择模型时同步显示对应的 API Base URL
 - 👤 **用户会话隔离**：每个用户的模型选择、记忆轮数、系统提示词等设置完全独立
 - 💭 **思考过程显示**：支持显示 AI 的推理思考过程（仅部分模型支持）
@@ -173,8 +173,17 @@ models:
     base_url: "API基础URL"
     supports_thinking: true/false  # 是否支持思考过程显示
 
+  # 相同 ID 可以通过不同 name 区分多个配置
+  - id: "模型ID"
+    name: "内部代理"
+    api_key: "代理API密钥"
+    base_url: "https://proxy.example.com/v1"
+    supports_thinking: false
+
 # 可选：显式指定默认模型（不指定则使用 models 列表中的第一个）
-# default_model_id: "gpt-4o"
+# default_model_id: "模型ID"
+# 默认 ID 匹配多个模型时必填
+# default_model_name: "页面显示名称"
 
 # 可选：对话记忆轮数（默认 5）
 context_size: 5
@@ -189,6 +198,7 @@ system_prompt: "You are a helpful AI assistant."
 |------|------|--------|
 | `API_KEY` | API 密钥 | - |
 | `MODEL_ID` | 模型 ID | `gpt-4o` |
+| `MODEL_NAME` | 模型显示名称 | `MODEL_ID` 的值 |
 | `BASE_URL` | API 基础 URL | `https://api.openai.com/v1` |
 
 ---

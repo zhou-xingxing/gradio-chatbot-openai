@@ -8,6 +8,13 @@ models:
     base_url: "https://api.openai.com/v1"
     supports_thinking: false
 
+# 同一模型ID可以通过不同名称配置多个服务入口
+#  - id: "gpt-4o"
+#    name: "GPT-4o 内部代理"
+#    api_key: "${PROXY_API_KEY}"
+#    base_url: "https://proxy.example.com/v1"
+#    supports_thinking: false
+
 # 示例：添加更多模型配置
 #  - id: "deepseek-chat"
 #    name: "DeepSeek Chat"
@@ -22,8 +29,10 @@ models:
 #    supports_thinking: false
 
 
-# 可选配置：显式指定默认模型ID（如果不指定，默认使用 models 列表中的第一个模型）
+# 可选配置：显式指定默认模型（不指定时使用 models 列表中的第一个模型）
 # default_model_id: "gpt-4o"
+# 如果 default_model_id 匹配多个模型，必须同时指定名称
+# default_model_name: "GPT-4o"
 
 # context_size: 对话记忆轮数，机器人能记住的最近对话轮数
 context_size: 5

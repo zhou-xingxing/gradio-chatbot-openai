@@ -1,6 +1,7 @@
+import json
+import logging
 import os
 import sys
-import logging
 from typing import Any, Generator, NoReturn, NotRequired, TypedDict
 from dotenv import load_dotenv
 from openai import OpenAI, APIError, AuthenticationError, RateLimitError
@@ -71,7 +72,7 @@ INPUT_HINT_CSS = """
 # Type definitions
 class UserState(TypedDict):
     """User session state structure."""
-    model_id: str
+    model_key: str
     context_size: int
     system_prompt: str
     enable_thinking: bool
@@ -81,6 +82,7 @@ class ModelConfig(TypedDict):
     """模型配置结构。"""
     id: str
     name: str
+    model_key: str
     api_key: str
     base_url: str
     supports_thinking: NotRequired[bool]
@@ -92,7 +94,7 @@ class AppConfig(TypedDict):
     models: list[ModelConfig]
     context_size: int
     system_prompt: str
-    default_model_id: str
+    default_model_key: str
 
 
 # OpenAI client cache to avoid recreating clients
@@ -102,15 +104,20 @@ _client_cache: dict[str, OpenAI] = {}
 _model_context_cache: dict[str, str] = {}
 
 
-def get_or_create_openai_client(model_id: str) -> OpenAI:
+def get_or_create_openai_client(model_key: str) -> OpenAI:
     """Create or get cached OpenAI client for the specified model."""
-    if model_id not in _client_cache:
-        model_config = get_model_config(model_id)
-        _client_cache[model_id] = OpenAI(
+    if model_key not in _client_cache:
+        model_config = get_model_config(model_key)
+        _client_cache[model_key] = OpenAI(
             api_key=model_config['api_key'],
             base_url=model_config['base_url']
         )
-    return _client_cache[model_id]
+    return _client_cache[model_key]
+
+
+def make_model_key(model_id: str, model_name: str) -> str:
+    """将模型ID和名称编码为无拼接歧义的内部唯一标识。"""
+    return json.dumps([model_id, model_name], ensure_ascii=False, separators=(',', ':'))
 
 
 def load_config() -> AppConfig:
@@ -153,7 +160,7 @@ def validate_config(config: Any) -> AppConfig:
         exit_config_error("models 必须是非空列表")
 
     models: list[ModelConfig] = []
-    model_ids: set[str] = set()
+    model_keys: set[str] = set()
     for index, raw_model in enumerate(raw_models, start=1):
         if not isinstance(raw_model, dict):
             exit_config_error(f"models[{index}] 必须是字典")
@@ -162,12 +169,14 @@ def validate_config(config: Any) -> AppConfig:
         if not isinstance(raw_model_id, str) or not raw_model_id.strip():
             exit_config_error(f"models[{index}] 缺少非空字符串字段 'id'")
         model_id = raw_model_id.strip()
-        if model_id in model_ids:
-            exit_config_error(f"模型 ID '{model_id}' 重复")
 
         raw_model_name = raw_model.get('name')
         if not isinstance(raw_model_name, str) or not raw_model_name.strip():
             exit_config_error(f"模型 '{model_id}' 缺少非空字符串字段 'name'")
+        model_name = raw_model_name.strip()
+        model_key = make_model_key(model_id, model_name)
+        if model_key in model_keys:
+            exit_config_error(f"模型标识 (id='{model_id}', name='{model_name}') 重复")
 
         raw_api_key = raw_model.get('api_key')
         if not isinstance(raw_api_key, str) or not raw_api_key.strip():
@@ -179,7 +188,8 @@ def validate_config(config: Any) -> AppConfig:
 
         model_config: ModelConfig = {
             'id': model_id,
-            'name': raw_model_name.strip(),
+            'name': model_name,
+            'model_key': model_key,
             'api_key': raw_api_key.strip(),
             'base_url': raw_base_url.strip(),
         }
@@ -200,7 +210,7 @@ def validate_config(config: Any) -> AppConfig:
                     exit_config_error(f"模型 '{model_id}' 的 max_model_len 不能为空字符串")
             model_config['max_model_len'] = raw_max_model_len
 
-        model_ids.add(model_id)
+        model_keys.add(model_key)
         models.append(model_config)
 
     raw_context_size = config.get('context_size', DEFAULT_CONTEXT_SIZE)
@@ -218,18 +228,45 @@ def validate_config(config: Any) -> AppConfig:
         exit_config_error("system_prompt 必须是字符串")
     system_prompt = raw_system_prompt.strip() or DEFAULT_SYSTEM_PROMPT
 
-    raw_default_model_id = config.get('default_model_id', models[0]['id'])
-    if not isinstance(raw_default_model_id, str) or not raw_default_model_id.strip():
-        exit_config_error("default_model_id 必须是非空字符串")
-    default_model_id = raw_default_model_id.strip()
-    if default_model_id not in model_ids:
-        exit_config_error(f"default_model_id '{default_model_id}' 不在 models 列表中")
+    raw_default_model_id = config.get('default_model_id')
+    raw_default_model_name = config.get('default_model_name')
+    if raw_default_model_id is None:
+        if raw_default_model_name is not None:
+            exit_config_error("配置 default_model_name 时必须同时配置 default_model_id")
+        default_model = models[0]
+    else:
+        if not isinstance(raw_default_model_id, str) or not raw_default_model_id.strip():
+            exit_config_error("default_model_id 必须是非空字符串")
+        default_model_id = raw_default_model_id.strip()
+        matching_models = [model for model in models if model['id'] == default_model_id]
+        if not matching_models:
+            exit_config_error(f"default_model_id '{default_model_id}' 不在 models 列表中")
+
+        if raw_default_model_name is None:
+            if len(matching_models) > 1:
+                exit_config_error(
+                    f"default_model_id '{default_model_id}' 匹配多个模型，必须配置 default_model_name"
+                )
+            default_model = matching_models[0]
+        else:
+            if not isinstance(raw_default_model_name, str) or not raw_default_model_name.strip():
+                exit_config_error("default_model_name 必须是非空字符串")
+            default_model_name = raw_default_model_name.strip()
+            default_model_key = make_model_key(default_model_id, default_model_name)
+            matching_default_models = [
+                model for model in matching_models if model['model_key'] == default_model_key
+            ]
+            if not matching_default_models:
+                exit_config_error(
+                    f"默认模型 (id='{default_model_id}', name='{default_model_name}') 不在 models 列表中"
+                )
+            default_model = matching_default_models[0]
 
     return {
         'models': models,
         'context_size': context_size,
         'system_prompt': system_prompt,
-        'default_model_id': default_model_id,
+        'default_model_key': default_model['model_key'],
     }
 
 # Load environment variables
@@ -239,13 +276,13 @@ load_dotenv()
 CONFIG = load_config()
 
 # Build model config mapping and dropdown choices
-MODEL_CONFIG_MAP = {model['id']: model for model in CONFIG['models']}
-MODEL_CHOICES = [(model['name'], model['id']) for model in CONFIG['models']]
+MODEL_CONFIG_MAP = {model['model_key']: model for model in CONFIG['models']}
+MODEL_CHOICES = [(model['name'], model['model_key']) for model in CONFIG['models']]
 
 
-def get_model_config(model_id: str) -> ModelConfig:
+def get_model_config(model_key: str) -> ModelConfig:
     """Get configuration for a specific model."""
-    return MODEL_CONFIG_MAP.get(model_id, CONFIG['models'][0])
+    return MODEL_CONFIG_MAP.get(model_key, CONFIG['models'][0])
 
 
 def fetch_max_model_len_from_api(model_id: str, model_config: ModelConfig) -> str:
@@ -280,7 +317,7 @@ def fetch_max_model_len_from_api(model_id: str, model_config: ModelConfig) -> st
     return ""
 
 
-def fetch_max_model_len(model_id: str) -> str:
+def fetch_max_model_len(model_key: str) -> str:
     """Get max_model_len from cache or config. Returns empty string if not available.
 
     Priority:
@@ -289,11 +326,11 @@ def fetch_max_model_len(model_id: str) -> str:
     3. Empty string if neither available
     """
     # First check cache
-    if model_id in _model_context_cache:
-        return _model_context_cache[model_id]
+    if model_key in _model_context_cache:
+        return _model_context_cache[model_key]
 
     # Fall back to config
-    model_config = get_model_config(model_id)
+    model_config = get_model_config(model_key)
     max_len = model_config.get('max_model_len')
     if max_len is not None:
         return str(max_len)
@@ -306,23 +343,28 @@ def load_all_model_contexts() -> None:
     global _model_context_cache
     logger.info("正在加载所有模型的上下文长度...")
 
-    for model_id, model_config in MODEL_CONFIG_MAP.items():
+    for model_key, model_config in MODEL_CONFIG_MAP.items():
+        model_id = model_config['id']
+        model_name = model_config['name']
         # First try API
         max_len = fetch_max_model_len_from_api(model_id, model_config)
 
         # If API failed, try config
         if not max_len:
-            logger.info(f"API 无法获取模型 '{model_id}' 的上下文长度，尝试从配置文件获取...")
+            logger.info(
+                f"API 无法获取模型 '{model_name}' ({model_id}) 的上下文长度，"
+                "尝试从配置文件获取..."
+            )
             config_max_len = model_config.get('max_model_len')
             if config_max_len is not None:
                 max_len = str(config_max_len)
 
         # Store in cache (even if empty, to avoid repeated API calls)
-        _model_context_cache[model_id] = max_len
+        _model_context_cache[model_key] = max_len
         if max_len:
-            logger.info(f"模型 '{model_id}' 的最大上下文长度: {max_len}")
+            logger.info(f"模型 '{model_name}' ({model_id}) 的最大上下文长度: {max_len}")
         else:
-            logger.warning(f"模型 '{model_id}' 无法获取最大上下文长度")
+            logger.warning(f"模型 '{model_name}' ({model_id}) 无法获取最大上下文长度")
 
     logger.info("模型上下文长度加载完成")
 
@@ -334,19 +376,19 @@ load_all_model_contexts()
 def create_user_state(enable_thinking: bool = True) -> UserState:
     """Create a new user-specific state."""
     return {
-        "model_id": CONFIG['default_model_id'],
+        "model_key": CONFIG['default_model_key'],
         "context_size": CONFIG['context_size'],
         "system_prompt": CONFIG['system_prompt'],
         "enable_thinking": enable_thinking
     }
 
 
-def update_model(model_id: str, state: UserState) -> UserState:
+def update_model(model_key: str, state: UserState) -> UserState:
     """Update the selected model."""
-    state["model_id"] = model_id
+    state["model_key"] = model_key
 
     # Update thinking capability based on model
-    model_config = get_model_config(model_id)
+    model_config = get_model_config(model_key)
     if model_config.get('supports_thinking', False):
         # 如果模型支持思考能力，默认启用
         state["enable_thinking"] = True
@@ -379,8 +421,9 @@ def update_system_prompt(prompt: str, state: UserState) -> UserState:
 
 def chat_response(message: str, history: list[dict] | None, state: UserState) -> Generator[str, None, None]:
     """Generate chat response using OpenAI API with streaming."""
-    model_id = state.get("model_id", CONFIG['default_model_id'])
-    model_config = get_model_config(model_id)
+    model_key = state.get("model_key", CONFIG['default_model_key'])
+    model_config = get_model_config(model_key)
+    model_id = model_config['id']
 
     # Build conversation history
     messages = []
@@ -425,7 +468,7 @@ def chat_response(message: str, history: list[dict] | None, state: UserState) ->
 
     try:
         # Create client for this model
-        client = get_or_create_openai_client(model_id)
+        client = get_or_create_openai_client(model_key)
 
         # Build API request parameters
         api_params = {
@@ -494,7 +537,8 @@ with gr.Blocks(title="AI Chatbot") as demo:
     gr.Markdown("# 🤖 AI 聊天机器人")
 
     # Get default model's thinking support for initial state
-    default_supports_thinking = MODEL_CONFIG_MAP[CONFIG['default_model_id']].get('supports_thinking', False)
+    default_model_config = get_model_config(CONFIG['default_model_key'])
+    default_supports_thinking = default_model_config.get('supports_thinking', False)
 
     # User-specific state (isolated per session)
     user_state = gr.State(create_user_state(enable_thinking=default_supports_thinking))
@@ -537,14 +581,14 @@ with gr.Blocks(title="AI Chatbot") as demo:
             model_dropdown = gr.Dropdown(
                 label="选择模型",
                 choices=MODEL_CHOICES,
-                value=CONFIG['default_model_id'],
+                value=CONFIG['default_model_key'],
                 info="选择要使用的AI模型"
             )
 
             # 模型ID展示（只读，跟随模型选择更新）
             model_id_display = gr.Textbox(
                 label="Model ID",
-                value=CONFIG['default_model_id'],
+                value=default_model_config['id'],
                 interactive=False,
                 info="API请求使用的模型ID"
             )
@@ -552,7 +596,7 @@ with gr.Blocks(title="AI Chatbot") as demo:
             # URL display (read-only, synced with model selection)
             model_url_display = gr.Textbox(
                 label="API Base URL",
-                value=MODEL_CONFIG_MAP[CONFIG['default_model_id']]['base_url'],
+                value=default_model_config['base_url'],
                 interactive=False,
                 info="模型对应的API地址"
             )
@@ -560,7 +604,7 @@ with gr.Blocks(title="AI Chatbot") as demo:
             # Max context length display (read-only, synced with model selection)
             max_context_display = gr.Textbox(
                 label="最大上下文长度",
-                value=fetch_max_model_len(CONFIG['default_model_id']),
+                value=fetch_max_model_len(CONFIG['default_model_key']),
                 interactive=False,
                 info="模型支持的最大上下文token数(输入+输出)"
             )
@@ -586,7 +630,6 @@ with gr.Blocks(title="AI Chatbot") as demo:
             update_context_btn = gr.Button("更新记忆设置", size="sm")
 
             # Get default model's thinking support for initial state
-            default_supports_thinking = MODEL_CONFIG_MAP[CONFIG['default_model_id']].get('supports_thinking', False)
             show_thinking = gr.Checkbox(
                 label="启用思考能力",
                 value=default_supports_thinking,
@@ -635,22 +678,25 @@ with gr.Blocks(title="AI Chatbot") as demo:
     )
 
     # Model selection handler
-    def on_model_change(model_id: str, state: UserState) -> tuple[UserState, str, str, str, dict]:
-        state = update_model(model_id, state)
-        model_config = get_model_config(model_id)
+    def on_model_change(model_key: str, state: UserState) -> tuple[UserState, str, str, str, dict]:
+        state = update_model(model_key, state)
+        model_config = get_model_config(model_key)
 
         # Get URL for the selected model
         url = model_config.get('base_url', '')
 
         # Fetch max context length from API or config
-        max_context_len = fetch_max_model_len(model_id)
+        max_context_len = fetch_max_model_len(model_key)
 
         # Update thinking checkbox based on model support
         supports_thinking = model_config.get('supports_thinking', False)
 
         # 返回更新后的状态、模型ID、URL、最大上下文长度和 checkbox 配置
         # update_model 已经根据模型支持情况设置了 state["enable_thinking"]
-        return state, model_id, url, max_context_len, gr.update(value=state["enable_thinking"], interactive=supports_thinking)
+        return state, model_config['id'], url, max_context_len, gr.update(
+            value=state["enable_thinking"],
+            interactive=supports_thinking,
+        )
 
     model_dropdown.change(
         on_model_change,
